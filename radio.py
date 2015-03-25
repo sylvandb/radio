@@ -1,173 +1,186 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+# vim: ts=2 sts=2 sw=2 et si
 #
-# A simple internet radio for RaspberryPI
-# Based on mpd/mpc and the Character LCD Plate by Adafruit
+# A simple internet radio for Raspberry Pi
+# by sdb
 #
-# The basic navigation code is based on lcdmenu.py by Alan Aufderheide
-#
+# Based on https://tinkerthon.de/2013/04/internet-radio-mit-raspberrypi-2-zeiligem-rgb-lcd-und-5-tasten/
 # Copyright (c) 2013 Olav Schettler
 # Open source. MIT license
 #
-
-from Adafruit_CharLCDPlate import Adafruit_CharLCDPlate
-import re
-import shlex, subprocess
-from time import strftime, sleep
-from unidecode import unidecode
-
-DEBUG = False
-
-def fixed_length(str, length):
-  'Truncate and pad str to length'
-  return ('{:<%d}' % length).format(str[:length])
+# Based on mpd/mpc and the Character LCD Plate by Adafruit
+#
+# The basic navigation code is based on lcdmenu.py by Alan Aufderheide
 
 
-class Node:
+import Adafruit_CharLCD as LCD
+import subprocess
+import signal
+from time import strftime, sleep, time as ticker
+try:
+	from unidecode import unidecode
+except ImportError:
+	unidecode = lambda f: f
+
+
+DEBUG = 0
+TIME_FORMAT = '%m.%d %H:%M:%S'
+
+
+
+class Node(object):
   '''
   Base class for nodes in a hierarchical navigation tree
   '''
-  def __init__(self, text):
-    self.mark = '-'
-    self.parent = None
-    self.text = text
-  
+  mark = '-'
+  parent = None
+
+  def __init__(self, text=None, **kwargs):
+    if not text is None:
+      self.text = str(text)
+
   def into(self):
     pass
-  
+
   def __repr__(self):
-    return 'node:' + self.text
+    return 'node: ' + str(self.text)
+
 
 
 class Timer(Node):
-  def __init__(self):
-    self.mark = '-'
-    self.parent = None
-  
-  def gettext(self):
-    print "TT"
-    return strftime('%H:%M:%S %d.%m')
+  def __init__(self, **kwargs):
+    super(Timer, self).__init__(**kwargs)
 
-  text = property(gettext)
-  
+  @property
+  def text(self):
+    return strftime(TIME_FORMAT)
+
+
 
 class Folder(Node):
-  def __init__(self, text, items=[]):
-    Node.__init__(self, text)
+  def __init__(self, text, items=[], wrap=False, **kwargs):
+    super(Folder, self).__init__(text=text, **kwargs)
+    self.wrap = wrap
     self.mark = '>'
     self.setItems(items)
-  
+
   def setItems(self, items):
     self.items = items
     for item in self.items:
       item.parent = self
 
 
+
 class Playlists(Folder):
-  def __init__(self, radio):
-    Folder.__init__(self, 'Playlists')
+  def __init__(self, radio, wrap=True, **kwargs):
     self.radio = radio
+    super(Playlists, self).__init__(text='Playlists', wrap=wrap, **kwargs)
 
   def into(self):
-    print "into", repr(self)
+    if DEBUG: print "into", repr(self)
     self.setItems([
-      Playlist(playlist, self.radio) for playlist in self.radio.command('mpc lsplaylists')
+      Playlist(playlist, self.radio) for playlist in sorted(self.radio.mpccommand('lsplaylists'))
     ])
+
 
 
 class FinishException(Exception):
   pass
 
 
-class App:
+
+class App(object):
   '''
   Base class of applications and applets
   '''
   ROWS = 2
   COLS = 16
-  
-  def __init__(self, lcd, folder):
+
+  def __init__(self, lcd, folder, **kwargs):
     self.lcd = lcd
     self.folder = folder
     self.top = 0
     self.selected = 0
+    self.lastmsg = None
+    self.buttonfuncs = {
+      LCD.LEFT: self.left,
+      LCD.UP: self.up,
+      LCD.DOWN: self.down,
+      LCD.RIGHT: self.right,
+      LCD.SELECT: self.select
+    }
 
-  
+
+  @property
+  def ticks(self):
+    return int(10*ticker())
+
+
+  def fillline(self, msg):
+    'Truncate and pad msg to length'
+    return (msg + ' '*self.COLS)[:self.COLS]
+
+
+  def debugmsg(self, msg):
+    print '  +%s+ %4d'%('-'*self.COLS, self.top)
+    for n,m in enumerate(msg):
+      print('%2d|%s|' % (n,m))
+    print '  +%s+ %4d'%('-'*self.COLS, self.selected)
+
+
+  def _refresh(self):
+    self.lastmsg = None
+
   def display(self):
-    if self.top > len(self.folder.items) - self.ROWS:
-      self.top = len(self.folder.items) - self.ROWS
-    
-    if self.top < 0:
-      self.top = 0
-    
-    if DEBUG:
-      print '------------------'
-    
-    str = ''
-    for row in range(self.top, self.top + self.ROWS):
-      if row > self.top:
-        str += '\n'
-      if row < len(self.folder.items):
-        if row == self.selected:
-          line = self.folder.items[row].mark
-        else:
-          line = ' '
-        
-        line = fixed_length(line + self.folder.items[row].text, self.COLS)
-        str += line
-
-        if DEBUG:
-          print('|' + line + '|')
-
-    if DEBUG:
-      print '------------------'
-
-    self.lcd.home()
-    self.lcd.message(str)
+    msg = []
+    for rown in range(self.ROWS):
+      row = (self.top + rown) % len(self.folder.items)
+      line = self.folder.items[row].mark if row == self.selected else ' '
+      line = self.fillline(line + self.folder.items[row].text)
+      msg.append(line)
+    if msg != self.lastmsg:
+      self.lastmsg = msg
+      if DEBUG:
+        self.debugmsg(self.lastmsg)
+      self.lcd.home()
+      self.lcd.message('\n'.join(self.lastmsg))
 
 
   def up(self):
-    if self.selected == 0:
-      return
-    elif self.selected > self.top:
-      self.selected -= 1
-    else:
-      self.top -= 1
-      self.selected -= 1
-
+    self.selected -= 1
+    if self.selected < 0:
+      self.selected = (len(self.folder.items) - 1) if self.folder.wrap else 0
+      if self.ROWS < len(self.folder.items):
+        self.top = self.selected
+    elif self.selected < self.top:
+      self.top = self.selected
 
   def down(self):
-    if self.selected + 1 == len(self.folder.items):
-      return
-    elif self.selected < self.top + self.ROWS - 1:
-      self.selected += 1
+    if self.folder.wrap:
+      self.selected = (self.selected + 1) % len(self.folder.items)
+      if self.ROWS < len(self.folder.items):
+        self.top = (self.selected - self.ROWS + 1 + len(self.folder.items)) % len(self.folder.items)
     else:
-      self.top += 1
-      self.selected += 1
+      self.selected = min(self.selected + 1, len(self.folder.items) - 1)
+      self.top = max(self.selected - self.ROWS + 1, 0)
 
 
   def left(self):
     if not isinstance(self.folder.parent, Folder):
-      return 
-    
+      return
+
     # find the current in the parent
-    itemno = 0
-    index = 0
-    for item in self.folder.parent.items:
-      if self.folder == item:
-        if DEBUG:
-          print 'foundit:', item
-        index = itemno
-      else:
-          itemno += 1
-    if index < len(self.folder.parent.items):
-      self.folder = self.folder.parent
-      self.top = index
-      self.selected = index
-    else:
-      self.folder = self.folder.parent
-      self.top = 0
-      self.selected = 0
+    try:
+      index = self.folder.parent.items.index(self.folder)
+      if DEBUG:
+        print 'foundit:', self.folder.parent.items[index]
+    except ValueError:
+      index = 0
+
+    self.folder = self.folder.parent
+    self.selected = index
+    self.top = max(self.selected - self.ROWS + 1, 0)
 
 
   def right(self):
@@ -178,107 +191,88 @@ class App:
       self.folder.into()
     elif isinstance(self.folder.items[self.selected], Applet):
       self.folder.items[self.selected].run()
+      self._refresh()
 
 
   def select(self):
     if isinstance(self.folder.items[self.selected], Applet):
       self.folder.items[self.selected].run()
+      self._refresh()
 
 
   def command(self, cmd):
-    print shlex.split(cmd)
-    result = subprocess.check_output(
-      shlex.split(cmd), stderr=subprocess.STDOUT
-    )
-    result = result.rstrip().split('\n')
-    print cmd, '-->', result
+    if DEBUG > 2: print DEBUG,cmd
+    try:
+      result = subprocess.check_output(cmd, stderr=subprocess.STDOUT).strip()
+    except subprocess.CalledProcessError as e:
+      if DEBUG > 4: print "---\n%s" % dir(e)
+      print "Error: %s\nOutput: %s" % (str(e), e.output)
+      result = ''
+    result = [r.strip() for r in result.split('\n')]
+    if DEBUG > 3: print cmd, '-->', result
     return result
+
+  def mpccommand(self, incmd):
+    cmd = ['mpc']
+    if isinstance(incmd, str):
+      cmd.append(incmd)
+    else:
+      cmd.extend(incmd)
+    return self.command(cmd)
 
 
   def tick(self):
-    '''
-    In case variable information is displayed, refresh every second
-    '''
     if self.ticks % 10 == 0:
       self.display()
+    sleep(0.1)
 
 
   def run(self):
     '''
     Basic event loop of the application
     '''
-    self.ticks = 0
-    self.display()
-    
+    if DEBUG: print 'start:', self.folder
     last_buttons = None
-
     while True:
       self.tick()
-      self.ticks += 1
-      sleep(0.1)
 
-      buttons = self.lcd.buttons()
+      buttons = self.lcd.read_buttons(self.buttonfuncs.keys())
+
       if last_buttons == buttons:
         continue
       last_buttons = buttons
-      
+
       try:
-        if (self.lcd.buttonPressed(self.lcd.LEFT)):
-          self.left()
-          self.display()
+        func = [self.buttonfuncs[k] for b,k in enumerate(self.buttonfuncs.keys()) if buttons[b]][0]
+      except IndexError:
+        continue
 
-        if (self.lcd.buttonPressed(self.lcd.UP)):
-          self.up()
-          self.display()
-
-        if (self.lcd.buttonPressed(self.lcd.DOWN)):
-          self.down()
-          self.display()
-
-        if (self.lcd.buttonPressed(self.lcd.RIGHT)):
-          self.right()
-          self.display()
-
-        if (self.lcd.buttonPressed(self.lcd.SELECT)):
-          self.select()
-          self.display()
-      
+      try:
+        func()
       except FinishException:
-        return
-      
+        break
 
-class Radio(App):
-  '''
-  The application.
-  '''
-  def __init__(self):
-    self.command('mpc stop')
+      self.display()
 
-    App.__init__(self,
-      Adafruit_CharLCDPlate(), 
-      Folder('Pauls iRadio', (
-        Playlists(self),
-        Folder('Settings', (
-          Node(self.command('hostname -I')[0]), 
-          Timer(), 
-        )),
-      ))
-    )
+    if DEBUG: print 'finish:', self.folder
+
 
 
 class Applet(App):
-  def __init__(self, text, app):
-    self.mark = '*'
-    self.parent = None
-    self.text = text
-    self.app = app
-    self.lcd = app.lcd
 
-  def command(self, cmd):
-    return self.app.command(cmd)
+  def __init__(self, text, app, **kwargs):
+    self.mark = '*'
+    self.text = text
+    super(Applet, self).__init__(app.lcd, None, **kwargs)
 
   def left(self):
-    return
+    'Return from applet'
+    while True:
+      buttons = self.lcd.read_buttons(self.buttonfuncs.keys())
+      if not sum(buttons):
+        raise FinishException
+      if DEBUG > 1: print 'return holding:',buttons
+      sleep(0.01)
 
   def right(self):
     return
@@ -293,85 +287,162 @@ class Applet(App):
     return
 
 
+
 class Playlist(Applet):
-  volumes = (0, 60, 70, 80, 85, 90, 95, 100)
-  
+  volumes = (0, 10, 40, 60, 70, 80, 85, 90, 95, 100)
+
+  def update(self):
+    try:
+      self.volume = int(self.mpccommand('volume')[0].split(':')[1][:-1])
+      res = self.mpccommand(['-f', '%name%\n%title%', 'current'])
+      res.extend(['']*self.ROWS)
+      self.lines[0] = unidecode(res[0].split(',', 1)[0]) or '{%s}'%self.text
+      self.lines[1] = unidecode(res[1]) or '{volume: %d%%}'%self.volume
+    except:
+      self.lines[0] = 'Update failed'
+      self.lines[1] = strftime(TIME_FORMAT)
+
+
   def display(self):
-    self.lines = (
-      unidecode(self.command('mpc -f %name% current')[0].split(',', 1)[0]),
-      unidecode(self.command('mpc -f %title% current')[0]),
-    )
-    
-    self.volume = int(re.search(r'\d+', 
-      self.command('mpc volume')[0]
-    ).group())
-    
-    self.dir = 'L'
-    self.shift = 0
+    ticks = self.ticks
+    if DEBUG > 9: print ticks - self.lastdisp
+    if 3 >= ticks - self.lastdisp >= 0:
+      return
+    if DEBUG > 1: print ticks - self.lastdisp
+    self.lastdisp = ticks
+
+    msg = [self.fillline(l[self.rpos[n]:]) for n,l in enumerate(self.lines)]
+    if msg != self.lastmsg:
+      self.lastmsg = msg
+      if DEBUG:
+        if DEBUG > 2:
+          self.debugmsg(self.lines)
+        self.debugmsg(self.lastmsg)
+      self.lcd.home()
+      self.lcd.message('\n'.join(self.lastmsg))
+
+    for r in range(self.ROWS):
+      if self.rdir[r] == 'L':
+        if self.rpos[r] + self.COLS < len(self.lines[r]):
+          self.rpos[r] += 1
+        else:
+          self.lastdisp = ticks + 10
+          self.rdir[r] = 'R'
+      elif self.rdir[r] == 'R':
+        self.lastdisp = ticks + 10
+        self.rdir[r] = 'L'
+        self.rpos[r] = 0
+
+    if 20 >= ticks - self.lastupd >= 0:
+      return
+    self.lastupd = ticks
+
+    self.update()
+    for r in range(self.ROWS):
+      if self.rpos[r] + self.COLS > len(self.lines[r]):
+        self.rdir[r] = 'L'
+        self.rpos[r] = 0
 
 
   def tick(self):
-    if self.ticks % 5 != 0:
-      return
-      
-    if self.lines[0] == '':
-      self.command('mpc volume 70')
-      self.display()
-      return
-
-    str = ''
-    str += fixed_length(self.lines[0], self.COLS)
-    str += '\n' + fixed_length(self.lines[1][self.shift:], self.COLS)
-    if DEBUG:
-      print '------------------'
-      for line in str.split('\n'):
-        print '|' + line + '|'
-      print '------------------'
-    
-    self.lcd.home()
-    self.lcd.message(str)
-    
-    if self.dir == 'L':
-      if self.shift + self.COLS < len(self.lines[1]):
-        self.shift += 1
-      else:
-        self.dir = 'R'
-    else:
-      if self.shift > 0:
-        self.shift -= 1
-      else:
-        self.display()
+    self.display()
+    super(Playlist, self).tick()
 
 
   def run(self):
-    self.command('mpc clear')
-    self.command('mpc load ' + self.text)
-    self.command('mpc play')
+    for cmd in ('clear', ['volume', '70'], ['load', self.text], 'play'):
+      self.mpccommand(cmd)
+    self.play = True
+    self.rpos = [0] * self.ROWS
+    self.rdir = ['L'] * self.ROWS
+    self.lines = [''] * self.ROWS
+    self.lastdisp = 0
+    self.lastupd = 0
+    self.update()
+    super(Playlist, self).run()
 
-    Applet.run(self)
 
-  def left(self):
-    'Return from applet'
-    raise FinishException
-  
+  def select(self):
+    self.play = not self.play
+    self.mpccommand('play' if self.play else 'stop')
+
+
   def up(self):
     try:
       pos = self.volumes.index(self.volume)
-    except:
-      pos = 0
+    except ValueError:
+      pos = self._findvolume()
+    self._setvolume(pos + 1)
 
-    if pos < len(self.volumes) - 1:
-      self.command('mpc volume %d' % self.volumes[pos + 1]) 
 
   def down(self):
     try:
       pos = self.volumes.index(self.volume)
-    except:
-      pos = 0
+    except ValueError:
+      pos = self._findvolume()
+    self._setvolume(pos - 1)
 
-    if pos > 0:
-      self.command('mpc volume %d' % self.volumes[pos - 1]) 
+
+  def _findvolume(self):
+    return len([i for i,v in enumerate(self.volumes) if v < self.volume])
+
+
+  def _setvolume(self, index):
+    try:
+      vol = str(self.volumes[max(min(index, len(self.volumes)-1), 0)])
+    except (ValueError,TypeError,IndexError):
+      vol = str(index)
+    self.mpccommand(['volume', vol])
+
+
+
+class Radio(App):
+  '''
+  The application.
+  '''
+
+  def __init__(self, lcd=None, **kwargs):
+    super(Radio, self).__init__(
+      lcd or LCD.Adafruit_CharLCDPlate(),
+      Folder('Radio', (
+        Playlists(self),
+        Folder('Settings', (
+          Node(self.command(['hostname', '-I'])[0]),
+          Timer(),
+        )),
+      )),
+      **kwargs
+    )
+    self.mpccommand('clear')
+
+
+  def run(self):
+
+    # catch shutdown
+    def myexit(*args,**kwargs): raise SystemExit('sigterm')
+    signal.signal(signal.SIGTERM, myexit)
+
+    try:
+      super(Radio, self).run()
+    except (KeyboardInterrupt, SystemExit):
+      pass
+
+    # cleanup
+    self.lcd.clear()
+    self.lcd.message('Exited\n%s' % strftime(TIME_FORMAT))
+    self.lcd.set_backlight(0)
+    self.mpccommand('clear')
+
+
 
 
 if __name__ == '__main__':
-  Radio().run()
+
+  # Initialize the LCD using my pins
+  lcd = LCD.Adafruit_CharLCDPlate(backlight=LCD.LCD_PLATE_SPARE, initial_color=(0,0,0))
+
+  # my GREEN and BLUE are swapped
+  lcd._blue  = LCD.LCD_PLATE_GREEN
+  lcd._green = LCD.LCD_PLATE_BLUE
+
+  Radio(lcd).run()
