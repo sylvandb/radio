@@ -224,7 +224,7 @@ class Applet(App):
     super(Applet, self).__init__(app.lcd, None, **kwargs)
 
   def left(self):
-    'Return from applet'
+    '''Return from applet'''
     while True:
       buttons = self.lcd.read_buttons(self.buttonfuncs.keys())
       if not sum(buttons):
@@ -342,6 +342,20 @@ class Playlist(Applet):
 
 
 
+class Shutdown(Applet):
+  def __init__(self, app):
+    self.text = 'Shutdown'
+    self.app = app
+    self.mark = '*'
+
+  def run(self):
+    super(Shutdown, self).__init__(self.text, self.app)
+    self.lcd.home()
+    self.lcd.message('Shutting down...\n')
+    #sleep(1); self.left()
+    self.command('poweroff')
+
+
 class Radio(App):
   '''
   The application.
@@ -355,6 +369,7 @@ class Radio(App):
         Folder(text='Settings', items=(
           Node(text=self.command(['hostname', '-I'])[0]),
           Timer(),
+          Shutdown(self),
         )),
         #Folder(text='Other', wrap=True, items=(
         #  Node(text='blargh'),
