@@ -34,14 +34,14 @@ class Node(object):
   Base class for nodes in a hierarchical navigation tree
   '''
   mark = '-'
-  parent = None
+  text = 'Node'
 
-  def __init__(self, text=None, **kwargs):
-    if not text is None:
-      self.text = str(text)
+  def __init__(self, **kwargs):
+    if not kwargs.get('text') is None:
+      self.text = str(kwargs.get('text'))
 
   def into(self):
-    pass
+    return
 
   def __repr__(self):
     return 'node: ' + str(self.text)
@@ -49,9 +49,6 @@ class Node(object):
 
 
 class Timer(Node):
-  def __init__(self, **kwargs):
-    super(Timer, self).__init__(**kwargs)
-
   @property
   def text(self):
     return strftime(TIME_FORMAT)
@@ -59,10 +56,11 @@ class Timer(Node):
 
 
 class Folder(Node):
-  def __init__(self, text, items=[], wrap=False, **kwargs):
-    super(Folder, self).__init__(text=text, **kwargs)
-    self.wrap = wrap
+  def __init__(self, items=[], wrap=False, **kwargs):
+    super(Folder, self).__init__(**kwargs)
+    self.parent = None
     self.mark = '>'
+    self.wrap = wrap
     self.setItems(items)
 
   def setItems(self, items):
@@ -112,12 +110,23 @@ class App(object):
     }
 
 
-  @property
-  def ticks(self):
-    return int(10*ticker())
+  def left(self):
+    return
+
+  def right(self):
+    return
+
+  def up(self):
+    return
+
+  def down(self):
+    return
+
+  def select(self):
+    return
 
 
-  def fillline(self, msg):
+  def msg2line(self, msg):
     'Truncate and pad msg to length'
     return (msg + ' '*self.COLS)[:self.COLS]
 
@@ -129,7 +138,7 @@ class App(object):
     print '  +%s+ %4d'%('-'*self.COLS, self.selected)
 
 
-  def _refresh(self):
+  def invalidatedisplay(self):
     self.lastmsg = None
 
   def display(self):
@@ -137,7 +146,7 @@ class App(object):
     for rown in range(self.ROWS):
       row = (self.top + rown) % len(self.folder.items)
       line = self.folder.items[row].mark if row == self.selected else ' '
-      line = self.fillline(line + self.folder.items[row].text)
+      line = self.msg2line(line + self.folder.items[row].text)
       msg.append(line)
     if msg != self.lastmsg:
       self.lastmsg = msg
@@ -145,59 +154,6 @@ class App(object):
         self.debugmsg(self.lastmsg)
       self.lcd.home()
       self.lcd.message('\n'.join(self.lastmsg))
-
-
-  def up(self):
-    self.selected -= 1
-    if self.selected < 0:
-      self.selected = (len(self.folder.items) - 1) if self.folder.wrap else 0
-      if self.ROWS < len(self.folder.items):
-        self.top = self.selected
-    elif self.selected < self.top:
-      self.top = self.selected
-
-  def down(self):
-    if self.folder.wrap:
-      self.selected = (self.selected + 1) % len(self.folder.items)
-      if self.ROWS < len(self.folder.items):
-        self.top = (self.selected - self.ROWS + 1 + len(self.folder.items)) % len(self.folder.items)
-    else:
-      self.selected = min(self.selected + 1, len(self.folder.items) - 1)
-      self.top = max(self.selected - self.ROWS + 1, 0)
-
-
-  def left(self):
-    if not isinstance(self.folder.parent, Folder):
-      return
-
-    # find the current in the parent
-    try:
-      index = self.folder.parent.items.index(self.folder)
-      if DEBUG:
-        print 'foundit:', self.folder.parent.items[index]
-    except ValueError:
-      index = 0
-
-    self.folder = self.folder.parent
-    self.selected = index
-    self.top = max(self.selected - self.ROWS + 1, 0)
-
-
-  def right(self):
-    if isinstance(self.folder.items[self.selected], Folder):
-      self.folder = self.folder.items[self.selected]
-      self.top = 0
-      self.selected = 0
-      self.folder.into()
-    elif isinstance(self.folder.items[self.selected], Applet):
-      self.folder.items[self.selected].run()
-      self._refresh()
-
-
-  def select(self):
-    if isinstance(self.folder.items[self.selected], Applet):
-      self.folder.items[self.selected].run()
-      self._refresh()
 
 
   def command(self, cmd):
@@ -221,10 +177,16 @@ class App(object):
     return self.command(cmd)
 
 
+  @property
+  def ticks(self):
+    ''' number of 1/10 seconds to have elapsed '''
+    return int(10*ticker())
+
   def tick(self):
+    ''' each 'tick' through the main run loop '''
     if self.ticks % 10 == 0:
       self.display()
-    sleep(0.1)
+    sleep(0.033)
 
 
   def run(self):
@@ -243,12 +205,7 @@ class App(object):
       last_buttons = buttons
 
       try:
-        func = [self.buttonfuncs[k] for b,k in enumerate(self.buttonfuncs.keys()) if buttons[b]][0]
-      except IndexError:
-        continue
-
-      try:
-        func()
+        buttons = [self.buttonfuncs[k]() for b,k in enumerate(self.buttonfuncs.keys()) if buttons[b]]
       except FinishException:
         break
 
@@ -259,6 +216,7 @@ class App(object):
 
 
 class Applet(App):
+  ''' Base class for all Applets '''
 
   def __init__(self, text, app, **kwargs):
     self.mark = '*'
@@ -274,22 +232,43 @@ class Applet(App):
       if DEBUG > 1: print 'return holding:',buttons
       sleep(0.01)
 
-  def right(self):
-    return
-
-  def up(self):
-    return
-
-  def down(self):
-    return
-
-  def select(self):
-    return
-
 
 
 class Playlist(Applet):
   volumes = (0, 10, 40, 60, 70, 80, 85, 90, 95, 100)
+
+  def select(self):
+    self.play = not self.play
+    self.mpccommand('play' if self.play else 'stop')
+
+
+  def up(self):
+    try:
+      pos = self.volumes.index(self.volume)
+    except ValueError:
+      pos = self._findvolume()
+    self._setvolume(pos + 1)
+
+
+  def down(self):
+    try:
+      pos = self.volumes.index(self.volume)
+    except ValueError:
+      pos = self._findvolume()
+    self._setvolume(pos - 1)
+
+
+  def _findvolume(self):
+    return len([i for i,v in enumerate(self.volumes) if v < self.volume])
+
+
+  def _setvolume(self, index):
+    try:
+      vol = str(self.volumes[max(min(index, len(self.volumes)-1), 0)])
+    except (ValueError,TypeError,IndexError):
+      vol = str(index)
+    self.mpccommand(['volume', vol])
+
 
   def update(self):
     try:
@@ -311,7 +290,7 @@ class Playlist(Applet):
     if DEBUG > 1: print ticks - self.lastdisp
     self.lastdisp = ticks
 
-    msg = [self.fillline(l[self.rpos[n]:]) for n,l in enumerate(self.lines)]
+    msg = [self.msg2line(l[self.rpos[n]:]) for n,l in enumerate(self.lines)]
     if msg != self.lastmsg:
       self.lastmsg = msg
       if DEBUG:
@@ -362,39 +341,6 @@ class Playlist(Applet):
     super(Playlist, self).run()
 
 
-  def select(self):
-    self.play = not self.play
-    self.mpccommand('play' if self.play else 'stop')
-
-
-  def up(self):
-    try:
-      pos = self.volumes.index(self.volume)
-    except ValueError:
-      pos = self._findvolume()
-    self._setvolume(pos + 1)
-
-
-  def down(self):
-    try:
-      pos = self.volumes.index(self.volume)
-    except ValueError:
-      pos = self._findvolume()
-    self._setvolume(pos - 1)
-
-
-  def _findvolume(self):
-    return len([i for i,v in enumerate(self.volumes) if v < self.volume])
-
-
-  def _setvolume(self, index):
-    try:
-      vol = str(self.volumes[max(min(index, len(self.volumes)-1), 0)])
-    except (ValueError,TypeError,IndexError):
-      vol = str(index)
-    self.mpccommand(['volume', vol])
-
-
 
 class Radio(App):
   '''
@@ -404,16 +350,74 @@ class Radio(App):
   def __init__(self, lcd=None, **kwargs):
     super(Radio, self).__init__(
       lcd or LCD.Adafruit_CharLCDPlate(),
-      Folder('Radio', (
+      Folder(items=(
         Playlists(self),
-        Folder('Settings', (
-          Node(self.command(['hostname', '-I'])[0]),
+        Folder(text='Settings', items=(
+          Node(text=self.command(['hostname', '-I'])[0]),
           Timer(),
         )),
+        #Folder(text='Other', wrap=True, items=(
+        #  Node(text='blargh'),
+        #  Node(text='ugh'),
+        #  Node(text='urk')
+        #)),
       )),
       **kwargs
     )
     self.mpccommand('clear')
+
+
+  def up(self):
+    self.selected -= 1
+    if self.selected < 0:
+      self.selected = (len(self.folder.items) - 1) if self.folder.wrap else 0
+      if self.ROWS < len(self.folder.items):
+        self.top = self.selected
+    elif self.selected < self.top:
+      self.top = self.selected
+
+
+  def down(self):
+    if self.folder.wrap:
+      self.selected = (self.selected + 1) % len(self.folder.items)
+      if self.ROWS < len(self.folder.items):
+        self.top = (self.selected - self.ROWS + 1 + len(self.folder.items)) % len(self.folder.items)
+    else:
+      self.selected = min(self.selected + 1, len(self.folder.items) - 1)
+      self.top = max(self.selected - self.ROWS + 1, 0)
+
+
+  def left(self):
+    if not isinstance(self.folder.parent, Folder):
+      return
+
+    # find the current in the parent
+    try:
+      index = self.folder.parent.items.index(self.folder)
+      if DEBUG:
+        print 'foundit:', self.folder.parent.items[index]
+    except ValueError:
+      index = 0
+
+    self.folder = self.folder.parent
+    self.selected = index
+    self.top = max(self.selected - self.ROWS + 1, 0)
+
+
+  def right(self):
+    if isinstance(self.folder.items[self.selected], Applet):
+      self.folder.items[self.selected].run()
+      self.invalidatedisplay()
+    elif isinstance(self.folder.items[self.selected], Folder):
+      self.folder = self.folder.items[self.selected]
+      self.top = self.selected = 0
+      self.folder.into()
+
+
+  def select(self):
+    if isinstance(self.folder.items[self.selected], Applet):
+      self.folder.items[self.selected].run()
+      self.invalidatedisplay()
 
 
   def run(self):
