@@ -544,13 +544,25 @@ class Radio(App):
 if __name__ == '__main__':
 
   import onlyone
-  onlyone.running()
+  import sys
 
-  # Initialize the LCD using my pins
-  lcd = Locking_CharLCDPlate(backlight=LCD.LCD_PLATE_SPARE, initial_color=(0,0,0))
+  def myinit():
+    if not onlyone.me():
+      onlyone.running()
+    # Initialize the LCD using my pins
+    lcd = Locking_CharLCDPlate(backlight=LCD.LCD_PLATE_SPARE, initial_color=(0,0,0))
+    # my GREEN and BLUE are swapped
+    lcd._blue  = LCD.LCD_PLATE_GREEN
+    lcd._green = LCD.LCD_PLATE_BLUE
+    return lcd
 
-  # my GREEN and BLUE are swapped
-  lcd._blue  = LCD.LCD_PLATE_GREEN
-  lcd._green = LCD.LCD_PLATE_BLUE
+  while 'retry' in sys.argv:
+    try:
+      lcd = myinit()
+      break
+    except IOError:
+      sleep(2)
+  else:
+      lcd = myinit()
 
   Radio(lcd).run()

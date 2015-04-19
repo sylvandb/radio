@@ -26,7 +26,14 @@ def running(name=DEFAULT_NAME, path='/dev/shm', extension='.pid'):
     _fp[name] = fp
 
 
+# done running
 def done(name=DEFAULT_NAME):
     if _fp.get(name):
         _fp[name].close()
+        os.unlink(_fp[name].name)
         del _fp[name]
+
+
+# check if 'me' is running
+def me(name=DEFAULT_NAME):
+    return bool(_fp.get(name))
