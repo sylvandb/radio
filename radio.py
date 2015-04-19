@@ -26,7 +26,23 @@ except ImportError:
 
 DEBUG = 0
 TIME_FORMAT = '%m.%d %H:%M:%S'
-IDLETIME = 10
+IDLE_SECS = 300
+
+
+
+
+class Locking_CharLCDPlate(LCD.Adafruit_CharLCDPlate):
+
+  import onlyone as _locker
+
+  def __init__(self, *args, **kwargs):
+    self._lockname = 'i2c-1-20'
+    self._locker.running(name=self._lockname)
+    super(Locking_CharLCDPlate, self).__init__(*args, **kwargs)
+
+  def __del__(self):
+    self._locker.done(name=self._lockname)
+
 
 
 
@@ -40,9 +56,18 @@ class Node(object):
   def __init__(self, **kwargs):
     if not kwargs.get('text') is None:
       self.text = str(kwargs.get('text'))
+    self.call = kwargs.get('call')
+    self._docall()
+
+  def _docall(self):
+    if self.call:
+      try:
+        self.text = self.call()
+      except Exception as e:
+        self.text = 'callerr: ' + str(e)
 
   def into(self):
-    return
+    self._docall()
 
   def __repr__(self):
     return 'node: ' + str(self.text)
@@ -194,7 +219,7 @@ class App(object):
     ''' each 'tick' through the main run loop '''
     if self.ticks % 10 == 0:
       self.display()
-    if int(ticker()) - self.press_at > IDLETIME:
+    if int(ticker()) - self.press_at > IDLE_SECS:
       self.lcd.set_backlight(0)
       self.backlight = False
     sleep(0.033)
@@ -393,17 +418,19 @@ class RGB(Applet):
 
 # TODO: confirm
 class Shutdown(Applet):
-  def __init__(self, app):
-    self.text = 'Shutdown'
-    self.mark = '*'
+  def __init__(self, app, restart=False):
     self.app = app
+    self.mark = '*'
+    self.text, self._msg, self._cmd = \
+      ('Restart',  'Restarting...\n',    ['sudo', 'reboot']) if restart else \
+      ('Shutdown', 'Shutting down...\n', ['sudo', 'poweroff'])
 
   def run(self):
     super(Shutdown, self).__init__(self.text, self.app)
     self.lcd.home()
-    self.lcd.message('Shutting down...\n')
+    self.lcd.message(self._msg)
     #sleep(1); self.left()
-    self.command('poweroff')
+    self.command(self._cmd)
 
 
 
@@ -414,14 +441,15 @@ class Radio(App):
 
   def __init__(self, lcd=None, **kwargs):
     super(Radio, self).__init__(
-      lcd or LCD.Adafruit_CharLCDPlate(),
+      lcd or Locking_CharLCDPlate(),
       Folder(items=(
         Playlists(self),
         Folder(text='Settings', items=(
-          Node(text=self.command(['hostname', '-I'])[0]),
+          Node(call=lambda: (self.command(['hostname', '-I']) or ['NoIP'])[0]),
           Timer(),
           RGB(self),
           Shutdown(self),
+          Shutdown(self, restart=True),
         )),
         #Folder(text='Other', wrap=True, items=(
         #  Node(text='blargh'),
@@ -479,12 +507,18 @@ class Radio(App):
       self.folder = self.folder.items[self.selected]
       self.top = self.selected = 0
       self.folder.into()
+    else:
+      # dummy into to update item text
+      self.folder.items[self.selected].into()
 
 
   def select(self):
     if isinstance(self.folder.items[self.selected], Applet):
       self.folder.items[self.selected].run()
       self.invalidatedisplay()
+    else:
+      # dummy into to update item text
+      self.folder.items[self.selected].into()
 
 
   def run(self):
@@ -509,8 +543,11 @@ class Radio(App):
 
 if __name__ == '__main__':
 
+  import onlyone
+  onlyone.running()
+
   # Initialize the LCD using my pins
-  lcd = LCD.Adafruit_CharLCDPlate(backlight=LCD.LCD_PLATE_SPARE, initial_color=(0,0,0))
+  lcd = Locking_CharLCDPlate(backlight=LCD.LCD_PLATE_SPARE, initial_color=(0,0,0))
 
   # my GREEN and BLUE are swapped
   lcd._blue  = LCD.LCD_PLATE_GREEN
