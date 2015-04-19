@@ -26,6 +26,7 @@ except ImportError:
 
 DEBUG = 0
 TIME_FORMAT = '%m.%d %H:%M:%S'
+IDLETIME = 10
 
 
 
@@ -108,6 +109,9 @@ class App(object):
       LCD.RIGHT: self.right,
       LCD.SELECT: self.select
     }
+    self.press_at = int(ticker())
+    self.lcd.set_backlight(1)
+    self.backlight = True
 
 
   def left(self):
@@ -141,13 +145,17 @@ class App(object):
   def invalidatedisplay(self):
     self.lastmsg = None
 
-  def display(self):
+  def msglist(self):
     msg = []
     for rown in range(self.ROWS):
       row = (self.top + rown) % len(self.folder.items)
       line = self.folder.items[row].mark if row == self.selected else ' '
       line = self.msg2line(line + self.folder.items[row].text)
       msg.append(line)
+    return msg
+
+  def display(self):
+    msg = self.msglist()
     if msg != self.lastmsg:
       self.lastmsg = msg
       if DEBUG:
@@ -186,6 +194,9 @@ class App(object):
     ''' each 'tick' through the main run loop '''
     if self.ticks % 10 == 0:
       self.display()
+    if int(ticker()) - self.press_at > IDLETIME:
+      self.lcd.set_backlight(0)
+      self.backlight = False
     sleep(0.033)
 
 
@@ -203,6 +214,10 @@ class App(object):
       if last_buttons == buttons:
         continue
       last_buttons = buttons
+      self.press_at = int(ticker())
+      if not self.backlight:
+        self.lcd.set_backlight(1)
+        self.backlight = True
 
       try:
         buttons = [self.buttonfuncs[k]() for b,k in enumerate(self.buttonfuncs.keys()) if buttons[b]]
@@ -342,11 +357,46 @@ class Playlist(Applet):
 
 
 
+class RGB(Applet):
+  def __init__(self, app):
+    self.text = 'RGB LED'
+    self.mark = '*'
+    self.app = app
+    self.names = ('Red', 'Green', 'Blue')
+    self.leds = [0,0,0]
+    self.which = 0
+
+  def led(self, state):
+    self.leds[self.which] = state
+    self.app.lcd.set_color(*self.leds)
+
+  def select(self):
+    self.led(not self.leds[self.which])
+
+  def up(self):
+    self.led(True)
+
+  def down(self):
+    self.led(False)
+
+  def right(self):
+    self.which = (self.which + 1) % 3
+
+  def msglist(self):
+    return ['%-16s' % '-'.join([self.names[n%3] for n in range(self.which,self.which+3)]), 'up-On, dn-Off']
+
+  def run(self):
+    super(RGB, self).__init__(self.text, self.app)
+    self.lcd.clear()
+    super(RGB, self).run()
+
+
+# TODO: confirm
 class Shutdown(Applet):
   def __init__(self, app):
     self.text = 'Shutdown'
-    self.app = app
     self.mark = '*'
+    self.app = app
 
   def run(self):
     super(Shutdown, self).__init__(self.text, self.app)
@@ -354,6 +404,7 @@ class Shutdown(Applet):
     self.lcd.message('Shutting down...\n')
     #sleep(1); self.left()
     self.command('poweroff')
+
 
 
 class Radio(App):
@@ -369,6 +420,7 @@ class Radio(App):
         Folder(text='Settings', items=(
           Node(text=self.command(['hostname', '-I'])[0]),
           Timer(),
+          RGB(self),
           Shutdown(self),
         )),
         #Folder(text='Other', wrap=True, items=(
