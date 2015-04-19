@@ -25,8 +25,8 @@ except ImportError:
 
 
 DEBUG = 0
-TIME_FORMAT = '%m.%d %H:%M:%S'
-IDLE_SECS = 300
+IDLE_SECS = 180
+TIME_FORMAT = '%Y.%m.%d %H:%M:%S'
 
 
 
@@ -46,10 +46,22 @@ class Locking_CharLCDPlate(LCD.Adafruit_CharLCDPlate):
 
 
 
-class Node(object):
+class BaseNode(object):
   '''
   Base class for nodes in a hierarchical navigation tree
   '''
+  mark = ' '
+  text = 'Base'
+  parent = None
+
+  def __repr__(self):
+    return 'node: ' + str(self.text)
+
+  def texttrunc(self, *args):
+    return self.text
+
+
+class Node(BaseNode):
   mark = '-'
   text = 'Node'
 
@@ -69,9 +81,6 @@ class Node(object):
   def into(self):
     self._docall()
 
-  def __repr__(self):
-    return 'node: ' + str(self.text)
-
 
 
 class Timer(Node):
@@ -79,13 +88,19 @@ class Timer(Node):
   def text(self):
     return strftime(TIME_FORMAT)
 
+  def texttrunc(self, cols):
+    s = self.text
+    if len(s) > cols:
+      s = s.replace('.', '')
+    return s[-cols:]
+
 
 
 class Folder(Node):
+  mark = '>'
+
   def __init__(self, items=[], wrap=False, **kwargs):
     super(Folder, self).__init__(**kwargs)
-    self.parent = None
-    self.mark = '>'
     self.wrap = wrap
     self.setItems(items)
 
@@ -114,7 +129,7 @@ class FinishException(Exception):
 
 
 
-class App(object):
+class App(BaseNode):
   '''
   Base class of applications and applets
   '''
@@ -174,9 +189,9 @@ class App(object):
     msg = []
     for rown in range(self.ROWS):
       row = (self.top + rown) % len(self.folder.items)
-      line = self.folder.items[row].mark if row == self.selected else ' '
-      line = self.msg2line(line + self.folder.items[row].text)
-      msg.append(line)
+      mark = self.folder.items[row].mark if row == self.selected else ' '
+      line = self.folder.items[row].texttrunc(self.COLS-1)
+      msg.append(self.msg2line(mark + line))
     return msg
 
   def display(self):
@@ -257,9 +272,9 @@ class App(object):
 
 class Applet(App):
   ''' Base class for all Applets '''
+  mark = '*'
 
   def __init__(self, text, app, **kwargs):
-    self.mark = '*'
     self.text = text
     super(Applet, self).__init__(app.lcd, None, **kwargs)
 
@@ -319,7 +334,7 @@ class Playlist(Applet):
       self.lines[1] = unidecode(res[1]) or '{volume: %d%%}'%self.volume
     except:
       self.lines[0] = 'Update failed'
-      self.lines[1] = strftime(TIME_FORMAT)
+      self.lines[1] = strftime(TIME_FORMAT)[1-self.COLS:]
 
 
   def display(self):
@@ -383,12 +398,13 @@ class Playlist(Applet):
 
 
 class RGB(Applet):
+  mark = '*'
+  text = 'RGB LED'
+  names = ('Red', 'Green', 'Blue')
+  leds = [0,0,0]
+
   def __init__(self, app):
-    self.text = 'RGB LED'
-    self.mark = '*'
     self.app = app
-    self.names = ('Red', 'Green', 'Blue')
-    self.leds = [0,0,0]
     self.which = 0
 
   def led(self, state):
@@ -534,7 +550,7 @@ class Radio(App):
 
     # cleanup
     self.lcd.clear()
-    self.lcd.message('Exited\n%s' % strftime(TIME_FORMAT))
+    self.lcd.message('Exited\n%s' % strftime(TIME_FORMAT)[-self.COLS:])
     self.lcd.set_backlight(0)
     self.mpccommand('clear')
 
