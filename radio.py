@@ -400,35 +400,35 @@ class Playlist(Applet):
 class RGB(Applet):
   mark = '*'
   text = 'RGB LED'
-  names = ('Red', 'Green', 'Blue')
-  leds = [0,0,0]
+  lnames = ('Red', 'Green', 'Blue')
+  lstates = [0,0,0]
 
   def __init__(self, app):
     self.app = app
-    self.which = 0
+    self.led = 0
 
-  def led(self, state):
-    self.leds[self.which] = state
-    self.app.lcd.set_color(*self.leds)
+  def setled(self, state):
+    self.lstates[self.led] = state
+    self.app.lcd.set_color(*self.lstates)
 
   def select(self):
-    self.led(not self.leds[self.which])
+    self.setled(not self.lstates[self.led])
 
   def up(self):
-    self.led(True)
+    self.setled(True)
 
   def down(self):
-    self.led(False)
+    self.setled(False)
 
   def right(self):
-    self.which = (self.which + 1) % 3
+    self.led = (self.led + 1) % 3
 
   def msglist(self):
-    return ['%-16s' % '-'.join([self.names[n%3] for n in range(self.which,self.which+3)]), 'up-On, dn-Off']
+    return ['-'.join([self.lnames[n%3] for n in range(self.led,self.led+3)]), 'up-On, dn-Off']
 
   def run(self):
     super(RGB, self).__init__(self.text, self.app)
-    self.lcd.clear()
+    self.app.lcd.clear()
     super(RGB, self).run()
 
 
