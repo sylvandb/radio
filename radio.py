@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 # vim: ts=2 sts=2 sw=2 et si
 #
-# A simple internet radio for Raspberry Pi
+# Internet radio for Raspberry Pi
 # by sdb
 #
 # Based on https://tinkerthon.de/2013/04/internet-radio-mit-raspberrypi-2-zeiligem-rgb-lcd-und-5-tasten/
@@ -17,7 +17,7 @@
 import Adafruit_CharLCD as LCD
 import subprocess
 import signal
-from time import strftime, sleep, time as ticker
+from time import strftime, sleep
 try:
 	from unidecode import unidecode
 except ImportError:
@@ -83,16 +83,28 @@ class Node(BaseNode):
 
 
 
-class Timer(Node):
+class Timer(BaseNode):
+  mark = '-'
+
+  def __init__(self, **kwargs):
+    self._lastcol = 0
+
   @property
   def text(self):
     return strftime(TIME_FORMAT)
 
+  def _choosefmt(self, cols):
+    self._lastcol = cols
+    self._timefmt = \
+      "%Y-%m-%d %H:%M:%S %Z" if cols >= 23 else \
+      "%Y-%m-%d %H:%M:%S" if cols >= 19 else \
+      "%Y%m%d %H%M%S"
+
   def texttrunc(self, cols):
-    s = self.text
-    if len(s) > cols:
-      s = s.replace('.', '')
-    return s[-cols:]
+    if self._lastcol != cols:
+      self._choosefmt(cols)
+    return strftime(self._timefmt)[-cols:]
+
 
 
 
@@ -129,6 +141,7 @@ class FinishException(Exception):
 
 
 
+ticks = 0
 class App(BaseNode):
   '''
   Base class of applications and applets
@@ -149,7 +162,8 @@ class App(BaseNode):
       LCD.RIGHT: self.right,
       LCD.SELECT: self.select
     }
-    self.press_at = int(ticker())
+    self.press_at = self.ticks
+    self.idle_secs = 10*IDLE_SECS
     self.lcd.set_backlight(1)
     self.backlight = True
 
@@ -187,11 +201,11 @@ class App(BaseNode):
 
   def msglist(self):
     msg = []
+    cols = self.COLS-1
     for rown in range(self.ROWS):
       row = (self.top + rown) % len(self.folder.items)
       mark = self.folder.items[row].mark if row == self.selected else ' '
-      line = self.folder.items[row].texttrunc(self.COLS-1)
-      msg.append(self.msg2line(mark + line))
+      msg.append(self.msg2line(mark + self.folder.items[row].texttrunc(cols)))
     return msg
 
   def display(self):
@@ -228,16 +242,17 @@ class App(BaseNode):
   @property
   def ticks(self):
     ''' number of 1/10 seconds to have elapsed '''
-    return int(10*ticker())
+    return ticks
 
   def tick(self):
-    ''' each 'tick' through the main run loop '''
-    if self.ticks % 10 == 0:
+    ''' each 1/10s 'tick' through the main run loop '''
+    global ticks
+    if not ticks % 10:
       self.display()
-    if int(ticker()) - self.press_at > IDLE_SECS:
-      self.lcd.set_backlight(0)
-      self.backlight = False
-    sleep(0.033)
+      if ticks - self.press_at > self.idle_secs:
+        self.lcd.set_backlight(0)
+        self.backlight = False
+    ticks += 1
 
 
   def run(self):
@@ -245,16 +260,27 @@ class App(BaseNode):
     Basic event loop of the application
     '''
     if DEBUG: print 'start:', self.folder
+
+    kbpoll = 0.033
+    ratio10ths = int(0.1/kbpoll)
+    uticks = 0
     last_buttons = None
+
     while True:
-      self.tick()
+
+      if self.backlight and not uticks % ratio10ths:
+        self.tick()
+        uticks = 0
+      uticks += 1
 
       buttons = self.lcd.read_buttons(self.buttonfuncs.keys())
 
       if last_buttons == buttons:
+        sleep(kbpoll)
         continue
+
       last_buttons = buttons
-      self.press_at = int(ticker())
+      self.press_at = self.ticks
       if not self.backlight:
         self.lcd.set_backlight(1)
         self.backlight = True
