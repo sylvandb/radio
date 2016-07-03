@@ -460,10 +460,11 @@ class RGB(Applet):
 
 # TODO: confirm
 class Shutdown(Applet):
-  def __init__(self, app, restart=False):
+  def __init__(self, app, restart=False, triplet=None):
     self.app = app
     self.mark = '*'
     self.text, self._msg, self._cmd = \
+      triplet if triplet else \
       ('Restart',  'Restarting...\n',    ['sudo', 'reboot']) if restart else \
       ('Shutdown', 'Shutting down...\n', ['sudo', 'poweroff'])
 
@@ -489,6 +490,7 @@ class Radio(App):
         Folder(text='Settings', items=(
           Node(call=lambda: (self.command(['hostname', '-I']) or ['NoIP'])[0]),
           Timer(),
+          Shutdown(self, triplet=('Fix WiFi', 'Fixing WiFi...\n', ('sudo', '/home/pi/bin/fixWiFi', 'logit'))),
           RGB(self),
           Shutdown(self),
           Shutdown(self, restart=True),
